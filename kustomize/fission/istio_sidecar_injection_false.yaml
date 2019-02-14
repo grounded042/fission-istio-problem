@@ -1,0 +1,22 @@
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: mqtrigger-nats-streaming
+  namespace: fission
+spec:
+  template:
+    metadata:
+      annotations:
+        sidecar.istio.io/inject: "false"
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: nats-streaming
+  namespace: fission
+spec:
+  template:
+    metadata:
+      annotations:
+        sidecar.istio.io/inject: "false"

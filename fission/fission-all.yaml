@@ -1,0 +1,904 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    istio-injection: enabled
+    name: fission
+  name: fission
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    chart: fission-all-1.0.0
+    istio-injection: enabled
+    name: fission-builder
+  name: fission-builder
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    chart: fission-all-1.0.0
+    istio-injection: enabled
+    name: fission-function
+  name: fission-function
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fission-builder
+  namespace: fission-builder
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fission-fetcher
+  namespace: fission-function
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fission-svc
+  namespace: fission
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: package-getter
+rules:
+- apiGroups:
+  - '*'
+  resources:
+  - packages
+  verbs:
+  - get
+  - watch
+  - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: secret-configmap-getter
+rules:
+- apiGroups:
+  - '*'
+  resources:
+  - secrets
+  - configmaps
+  verbs:
+  - get
+  - watch
+  - list
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: RoleBinding
+metadata:
+  name: fission-admin
+  namespace: fission
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: admin
+subjects:
+- kind: ServiceAccount
+  name: fission-svc
+  namespace: fission
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: fission-crd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: fission-svc
+  namespace: fission
+---
+apiVersion: v1
+data:
+  config.yaml: Y2FuYXJ5OgogIGVuYWJsZWQ6IHRydWUK
+kind: ConfigMap
+metadata:
+  name: feature-config
+  namespace: fission
+---
+apiVersion: v1
+data:
+  td-agent.conf: |
+    # Hide all fluent-related logs
+    <match fluent.**>
+      type null
+    </match>
+
+    # Collect all logs from the containers in the current namespace
+    <source>
+      type tail
+      format json
+      time_key time
+      path "#{ENV['FLUENTD_PATH']}"
+      time_format %Y-%m-%dT%H:%M:%S.%NZ
+      tag fission.*
+      read_from_head true
+      refresh_interval 5
+    </source>
+
+    # Augment logs with Kubernetes metadata
+    <filter fission.**>
+       type kubernetes_metadata
+    </filter>
+
+    # Simplify the nested objects to XX_YY_ZZ names
+    <filter fission.**>
+       type flatten_hash
+       separator _
+    </filter>
+
+    # Add `funcuid` to the record (using the functionUid label)
+    <match fission.**>
+       type record_reformer
+       enable_ruby false
+       tag log
+       <record>
+         funcuid ${kubernetes_labels_functionUid}
+       </record>
+    </match>
+
+    # Push logs into influxdb
+    <match **>
+      @type influxdb
+        host  "#{ENV['INFLUXDB_ADDRESS']}"
+        port  "#{ENV['INFLUXDB_PORT']}"
+        dbname "#{ENV['INFLUXDB_DBNAME']}"
+        user  "#{ENV['INFLUXDB_USERNAME']}"
+        password  "#{ENV['INFLUXDB_PASSWD']}"
+        use_ssl false
+        time_precision ns
+        tag_keys ["funcuid"]
+        sequence_tag _seq
+        buffer_type file
+        buffer_path /var/log/fission/fluentd.buffer
+        buffer_chunk_limit 128m
+        buffer_queue_limit 256
+        flush_interval 5
+        retry_limit 10
+        retry_wait 1.0
+        num_threads 2
+    </match>
+kind: ConfigMap
+metadata:
+  name: fission-fission-fluentd
+  namespace: fission
+---
+apiVersion: v1
+data:
+  password: VExGczExYk0zNVZ4d3pEZ05NbkE=
+  username: YWRtaW4=
+kind: Secret
+metadata:
+  labels:
+    chart: fission-all-1.0.0
+  name: influxdb
+  namespace: fission
+type: Opaque
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    application: fission-api
+    chart: fission-all-1.0.0
+    svc: controller
+  name: controller
+  namespace: fission
+spec:
+  ports:
+  - port: 80
+    targetPort: 8888
+  selector:
+    svc: controller
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    chart: fission-all-1.0.0
+    svc: executor
+  name: executor
+  namespace: fission
+spec:
+  ports:
+  - port: 80
+    targetPort: 8888
+  selector:
+    svc: executor
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    chart: fission-all-1.0.0
+    svc: influxdb
+  name: influxdb
+  namespace: fission
+spec:
+  ports:
+  - port: 8086
+    targetPort: 8086
+  selector:
+    svc: influxdb
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    chart: fission-all-1.0.0
+    svc: nats-streaming
+  name: nats-streaming
+  namespace: fission
+spec:
+  ports:
+  - port: 4222
+    targetPort: 4222
+  selector:
+    svc: nats-streaming
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    chart: fission-all-1.0.0
+  name: redis
+  namespace: fission
+spec:
+  ports:
+  - name: redis
+    port: 6379
+    protocol: TCP
+    targetPort: 6379
+  selector:
+    app: redis
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    application: fission-router
+    chart: fission-all-1.0.0
+    svc: router
+  name: router
+  namespace: fission
+spec:
+  ports:
+  - port: 80
+    targetPort: 8888
+  selector:
+    svc: router
+  type: LoadBalancer
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    application: fission-storage
+    chart: fission-all-1.0.0
+    svc: storagesvc
+  name: storagesvc
+  namespace: fission
+spec:
+  ports:
+  - port: 80
+    targetPort: 8000
+  selector:
+    svc: storagesvc
+  type: ClusterIP
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  labels:
+    chart: fission-all-1.0.0
+  name: buildermgr
+  namespace: fission
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        svc: buildermgr
+    spec:
+      containers:
+      - args:
+        - --builderMgr
+        - --storageSvcUrl
+        - http://storagesvc.fission
+        - --envbuilder-namespace
+        - fission-builder
+        - --collectorEndpoint
+        - ""
+        command:
+        - /fission-bundle
+        env:
+        - name: FETCHER_IMAGE
+          value: fission/fetcher:1.0.0
+        - name: FETCHER_IMAGE_PULL_POLICY
+          value: IfNotPresent
+        - name: BUILDER_IMAGE_PULL_POLICY
+          value: IfNotPresent
+        - name: TRACE_JAEGER_COLLECTOR_ENDPOINT
+          value: ""
+        - name: ENABLE_ISTIO
+          value: "true"
+        - name: TRACING_SAMPLING_RATE
+          value: "0.5"
+        image: index.docker.io/fission/fission-bundle:1.0.0
+        imagePullPolicy: IfNotPresent
+        name: buildermgr
+      serviceAccount: fission-svc
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  labels:
+    chart: fission-all-1.0.0
+  name: controller
+  namespace: fission
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        application: fission-api
+        svc: controller
+    spec:
+      containers:
+      - args:
+        - --controllerPort
+        - "8888"
+        - --collectorEndpoint
+        - ""
+        command:
+        - /fission-bundle
+        env:
+        - name: FISSION_FUNCTION_NAMESPACE
+          value: fission-function
+        - name: TRACING_SAMPLING_RATE
+          value: "0.5"
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        image: index.docker.io/fission/fission-bundle:1.0.0
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8888
+          initialDelaySeconds: 35
+          periodSeconds: 5
+        name: controller
+        readinessProbe:
+          failureThreshold: 30
+          httpGet:
+            path: /healthz
+            port: 8888
+          initialDelaySeconds: 1
+          periodSeconds: 1
+        volumeMounts:
+        - mountPath: /etc/config/config.yaml
+          name: config-volume
+          subPath: config.yaml
+      serviceAccount: fission-svc
+      volumes:
+      - configMap:
+          name: feature-config
+        name: config-volume
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  labels:
+    chart: fission-all-1.0.0
+  name: executor
+  namespace: fission
+spec:
+  replicas: 1
+  template:
+    metadata:
+      annotations:
+        prometheus.io/path: /metrics
+        prometheus.io/port: "8080"
+        prometheus.io/scrape: "true"
+      labels:
+        svc: executor
+    spec:
+      containers:
+      - args:
+        - --executorPort
+        - "8888"
+        - --namespace
+        - fission-function
+        - --fission-namespace
+        - fission
+        - --collectorEndpoint
+        - ""
+        command:
+        - /fission-bundle
+        env:
+        - name: FETCHER_IMAGE
+          value: fission/fetcher:1.0.0
+        - name: FETCHER_IMAGE_PULL_POLICY
+          value: IfNotPresent
+        - name: RUNTIME_IMAGE_PULL_POLICY
+          value: IfNotPresent
+        - name: TRACE_JAEGER_COLLECTOR_ENDPOINT
+          value: ""
+        - name: ENABLE_ISTIO
+          value: "true"
+        - name: FETCHER_MINCPU
+          value: 10m
+        - name: FETCHER_MINMEM
+          value: 16Mi
+        - name: FETCHER_MAXCPU
+          value: 1000m
+        - name: FETCHER_MAXMEM
+          value: 128Mi
+        - name: TRACING_SAMPLING_RATE
+          value: "0.5"
+        image: index.docker.io/fission/fission-bundle:1.0.0
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8888
+          initialDelaySeconds: 35
+          periodSeconds: 5
+        name: executor
+        ports:
+        - containerPort: 8080
+          name: metrics
+        - containerPort: 8888
+          name: http
+        readinessProbe:
+          failureThreshold: 30
+          httpGet:
+            path: /healthz
+            port: 8888
+          initialDelaySeconds: 1
+          periodSeconds: 1
+      serviceAccount: fission-svc
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  labels:
+    chart: fission-all-1.0.0
+  name: influxdb
+  namespace: fission
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        svc: influxdb
+    spec:
+      containers:
+      - env:
+        - name: PRE_CREATE_DB
+          value: fissionFunctionLog
+        - name: ADMIN_USER
+          valueFrom:
+            secretKeyRef:
+              key: username
+              name: influxdb
+        - name: INFLUXDB_INIT_PWD
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: influxdb
+        image: fission/influxdb
+        name: influxdb
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  labels:
+    chart: fission-all-1.0.0
+  name: kubewatcher
+  namespace: fission
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        svc: kubewatcher
+    spec:
+      containers:
+      - args:
+        - --kubewatcher
+        - --routerUrl
+        - http://router.fission
+        - --collectorEndpoint
+        - ""
+        command:
+        - /fission-bundle
+        env:
+        - name: TRACING_SAMPLING_RATE
+          value: "0.5"
+        image: index.docker.io/fission/fission-bundle:1.0.0
+        imagePullPolicy: IfNotPresent
+        name: kubewatcher
+      serviceAccount: fission-svc
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  labels:
+    chart: fission-all-1.0.0
+  name: mqtrigger-nats-streaming
+  namespace: fission
+spec:
+  replicas: 1
+  template:
+    metadata:
+      annotations:
+        sidecar.istio.io/inject: "false"
+      labels:
+        messagequeue: nats-streaming
+        svc: mqtrigger
+    spec:
+      containers:
+      - args:
+        - --mqt
+        - --routerUrl
+        - http://router.fission
+        - --collectorEndpoint
+        - ""
+        command:
+        - /fission-bundle
+        env:
+        - name: MESSAGE_QUEUE_TYPE
+          value: nats-streaming
+        - name: MESSAGE_QUEUE_URL
+          value: nats://defaultFissionAuthToken@nats-streaming:4222
+        - name: TRACING_SAMPLING_RATE
+          value: "0.5"
+        image: index.docker.io/fission/fission-bundle:1.0.0
+        imagePullPolicy: IfNotPresent
+        name: mqtrigger
+      serviceAccount: fission-svc
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  labels:
+    svc: nats-streaming
+  name: nats-streaming
+  namespace: fission
+spec:
+  replicas: 1
+  template:
+    metadata:
+      annotations:
+        sidecar.istio.io/inject: "false"
+      labels:
+        svc: nats-streaming
+    spec:
+      containers:
+      - args:
+        - --cluster_id
+        - fissionMQTrigger
+        - --auth
+        - defaultFissionAuthToken
+        - --max_channels
+        - "0"
+        image: nats-streaming
+        name: nats-streaming
+        ports:
+        - containerPort: 4222
+          hostPort: 4222
+          protocol: TCP
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  labels:
+    chart: fission-all-1.0.0
+  name: router
+  namespace: fission
+spec:
+  replicas: 1
+  template:
+    metadata:
+      annotations:
+        prometheus.io/path: /metrics
+        prometheus.io/port: "8080"
+        prometheus.io/scrape: "true"
+      labels:
+        application: fission-router
+        svc: router
+    spec:
+      containers:
+      - args:
+        - --routerPort
+        - "8888"
+        - --executorUrl
+        - http://executor.fission
+        - --collectorEndpoint
+        - ""
+        command:
+        - /fission-bundle
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: ROUTER_ROUND_TRIP_TIMEOUT
+          value: 50ms
+        - name: ROUTER_ROUNDTRIP_TIMEOUT_EXPONENT
+          value: "2"
+        - name: ROUTER_ROUND_TRIP_KEEP_ALIVE_TIME
+          value: 30s
+        - name: ROUTER_ROUND_TRIP_MAX_RETRIES
+          value: "10"
+        - name: ROUTER_ROUND_TRIP_SVC_ADDRESS_MAX_RETRIES
+          value: "5"
+        - name: ROUTER_ROUND_TRIP_SVC_ADDRESS_UPDATE_TIMEOUT
+          value: "30"
+        - name: DEBUG_ENV
+          value: "true"
+        - name: TRACING_SAMPLING_RATE
+          value: "0.5"
+        image: index.docker.io/fission/fission-bundle:1.0.0
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          httpGet:
+            path: /router-healthz
+            port: 8888
+          initialDelaySeconds: 35
+          periodSeconds: 5
+        name: router
+        ports:
+        - containerPort: 8080
+          name: metrics
+        - containerPort: 8888
+          name: http
+        readinessProbe:
+          failureThreshold: 30
+          httpGet:
+            path: /router-healthz
+            port: 8888
+          initialDelaySeconds: 1
+          periodSeconds: 1
+      serviceAccount: fission-svc
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  labels:
+    chart: fission-all-1.0.0
+  name: storagesvc
+  namespace: fission
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        application: fission-storage
+        svc: storagesvc
+    spec:
+      containers:
+      - args:
+        - --storageServicePort
+        - "8000"
+        - --filePath
+        - /fission
+        - --collectorEndpoint
+        - ""
+        command:
+        - /fission-bundle
+        env:
+        - name: TRACING_SAMPLING_RATE
+          value: "0.5"
+        - name: PRUNE_INTERVAL
+          value: "60"
+        image: index.docker.io/fission/fission-bundle:1.0.0
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8000
+          initialDelaySeconds: 35
+          periodSeconds: 5
+        name: storagesvc
+        readinessProbe:
+          failureThreshold: 30
+          httpGet:
+            path: /healthz
+            port: 8000
+          initialDelaySeconds: 1
+          periodSeconds: 1
+        volumeMounts:
+        - mountPath: /fission
+          name: fission-storage
+      serviceAccount: fission-svc
+      volumes:
+      - name: fission-storage
+        persistentVolumeClaim:
+          claimName: fission-storage-pvc
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  labels:
+    chart: fission-all-1.0.0
+  name: timer
+  namespace: fission
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        svc: timer
+    spec:
+      containers:
+      - args:
+        - --timer
+        - --routerUrl
+        - http://router.fission
+        command:
+        - /fission-bundle
+        image: index.docker.io/fission/fission-bundle:1.0.0
+        imagePullPolicy: IfNotPresent
+        name: timer
+      serviceAccount: fission-svc
+---
+apiVersion: apps/v1beta2
+kind: StatefulSet
+metadata:
+  labels:
+    chart: fission-all-1.0.0
+  name: redis
+  namespace: fission
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  serviceName: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - image: redis:3.2-alpine
+        imagePullPolicy: Always
+        name: redis
+        ports:
+        - containerPort: 6379
+          name: redis
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-delete-policy: hook-succeeded
+  labels:
+    app: fission-all
+    chart: fission-all-1.0.0
+    release: fission
+  name: fission-fission-all-1.0.0-512
+  namespace: fission
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: fission-all
+        release: fission
+      name: fission-fission-all
+    spec:
+      containers:
+      - args:
+        - --fn-pod-namespace
+        - fission-function
+        - --envbuilder-namespace
+        - fission-builder
+        command:
+        - /pre-upgrade-checks
+        image: fission/pre-upgrade-checks:1.0.0
+        imagePullPolicy: IfNotPresent
+        name: pre-upgrade-job
+      restartPolicy: Never
+      serviceAccount: fission-svc
+---
+apiVersion: extensions/v1beta1
+kind: DaemonSet
+metadata:
+  labels:
+    chart: fission-all-1.0.0
+  name: logger
+  namespace: fission
+spec:
+  template:
+    metadata:
+      labels:
+        svc: logger
+    spec:
+      containers:
+      - env:
+        - name: INFLUXDB_ADDRESS
+          value: influxdb
+        - name: INFLUXDB_PORT
+          value: "8086"
+        - name: INFLUXDB_DBNAME
+          value: fissionFunctionLog
+        - name: INFLUXDB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              key: username
+              name: influxdb
+        - name: INFLUXDB_PASSWD
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: influxdb
+        - name: FLUENTD_PATH
+          value: /var/log/containers/*fission-function*.log
+        image: index.docker.io/fission/fluentd:1.0.0
+        imagePullPolicy: IfNotPresent
+        name: fluentd
+        volumeMounts:
+        - mountPath: /var/log/
+          name: container-log
+          readOnly: true
+        - mountPath: /var/lib/docker/containers
+          name: docker-log
+          readOnly: true
+        - mountPath: /var/log/fission
+          name: fission-log
+          readOnly: false
+        - mountPath: /etc/td-agent/
+          name: fluentd-config
+          readOnly: true
+      serviceAccount: fission-svc
+      volumes:
+      - hostPath:
+          path: /var/log/
+        name: container-log
+      - hostPath:
+          path: /var/lib/docker/containers
+        name: docker-log
+      - hostPath:
+          path: /var/log/fission
+        name: fission-log
+      - configMap:
+          name: fission-fission-fluentd
+        name: fluentd-config
+  updateStrategy:
+    type: RollingUpdate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    app: fission-storage
+    chart: fission-all-1.0.0
+    release: fission
+  name: fission-storage-pvc
+  namespace: fission
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 8Gi
