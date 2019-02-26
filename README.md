@@ -14,4 +14,4 @@
 1. `$ fission environment create --name go --image fission/go-env --builder fission/go-builder`
 2. `$ fission fn create --name helloworld --env go --src fission-test.go --entrypoint Handler`
 3. `$ fission pkg info --name <name-from-last-command>`
-4. `$ fission fn test --name helloworld`
+```
